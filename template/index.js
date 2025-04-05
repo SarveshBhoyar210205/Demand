@@ -5,7 +5,7 @@ const SustainableRouteOptimizer = () => {
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
-  const backendURL = "http://127.0.0.1:5000";
+  const backendURL = "https://demand-production.up.railway.app";
 
   useEffect(() => {
     const script = document.createElement("script");
