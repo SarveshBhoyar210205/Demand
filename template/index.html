@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sustainable Route Optimizer</title>
+
+    <style>
+        #map { height: 500px; width: 100%; }
+        body { font-family: 'Roboto', sans-serif; margin: 20px; background-color: #f4f4f9; }
+        input, button { margin: 10px 0; padding: 10px; width: 100%; font-size: 16px; }
+        .route-summary { margin-top: 20px; font-family: 'Courier New', monospace; }
+        .route-summary h3 { color: #4CAF50; }
+        .route-summary pre { background-color: #fff; padding: 10px; font-size: 14px; border-radius: 5px; border: 1px solid #ddd; }
+        .route-instructions { margin-top: 20px; font-size: 16px; line-height: 1.5; }
+        .route-instructions span.maneuver { font-weight: bold; color: #FF6347; }
+        .route-instructions span.instructions { color: #2F4F4F; }
+    </style>
+
+    <script>
+        let map, autocompleteOrigin, autocompleteDestination;
+        const backendURL = "http://127.0.0.1:5000"; // Backend URL
+
+        function loadGoogleMapsScript() {
+            const script = document.createElement("script");
+            script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyCrTX-gRHbf-ZQ_k5Ji61IqrQENwJ7RUfA&libraries=places,geometry&callback=initMap`;
+            script.async = true;
+            script.defer = true;
+            document.head.appendChild(script);
+        }
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById("map"), {
+                center: { lat: 19.0760, lng: 72.8777 },
+                zoom: 10
+            });
+
+            autocompleteOrigin = new google.maps.places.Autocomplete(document.getElementById("origin"));
+            autocompleteDestination = new google.maps.places.Autocomplete(document.getElementById("destination"));
+        }
+
+        function findRoute() {
+            const origin = document.getElementById("origin").value.trim();
+            const destination = document.getElementById("destination").value.trim();
+            const statusMessage = document.getElementById("status");
+
+            if (!origin || !destination) {
+                statusMessage.innerText = "❌ Please enter both origin and destination.";
+                return;
+            }
+
+            getCoordinates(origin, (originCoords) => {
+                getCoordinates(destination, (destinationCoords) => {
+                    fetchRoutes(originCoords, destinationCoords);
+                });
+            });
+        }
+
+        function getCoordinates(address, callback) {
+            const geocoder = new google.maps.Geocoder();
+            geocoder.geocode({ address }, function (results, status) {
+                if (status === "OK" && results.length > 0) {
+                    const location = results[0].geometry.location;
+                    console.log(`✅ Geocoded ${address}:`, location.toJSON());
+                    callback(location);
+                } else {
+                    alert(`❌ Geocode failed for ${address}: ${status}`);
+                    console.error(`Geocode failed for ${address}:`, status);
+                }
+            });
+        }
+
+        function fetchRoutes(originCoords, destinationCoords) {
+            console.log("🚀 Fetching routes with:", originCoords, destinationCoords);
+
+            if (!originCoords || !destinationCoords) {
+                console.error("❌ Invalid coordinates received.");
+                return;
+            }
+
+            const requestBody = {
+                origin: { latitude: originCoords.lat(), longitude: originCoords.lng() },
+                destination: { latitude: destinationCoords.lat(), longitude: destinationCoords.lng() }
+            };
+
+            fetch(`${backendURL}/get-alternative-routes`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(requestBody)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log("🚀 Backend Response:", data);
+
+                if (data.success && data.routes.length > 0) {
+                    processRoutes(data.routes);
+                } else {
+                    console.error("❌ No routes found or API failed.");
+                    document.getElementById("status").innerText = "❌ No alternative routes available.";
+                }
+            })
+            .catch(error => console.error("❌ Error fetching routes:", error));
+        }
+
+        function processRoutes(routes) {
+    console.log("🚀 Processing Routes:", routes);
+    document.getElementById("status").innerText = "✅ Routes retrieved successfully!";
+
+    let bestRoute = null;
+    let bestRouteScore = Infinity; // Using a large initial score to find the optimal route
+
+    routes.forEach((routeData, index) => {
+        if (!routeData.polyline || !routeData.polyline.encodedPolyline) {
+            console.error(`⚠️ Route ${index + 1} has no polyline.`);
+            return;
+        }
+
+        let totalDistance = 0;
+        let totalDuration = 0;
+        let routeSummary = "";
+        let routePolyline = routeData.polyline.encodedPolyline; // Extract polyline directly
+
+        routeData.legs.forEach((leg) => {
+            let distance = leg.distanceMeters || (leg.distance && leg.distance.value) || 0;
+            let duration = leg.staticDuration 
+                ? parseInt(leg.staticDuration.match(/\d+/)[0], 10) || 0 
+                : (leg.duration && leg.duration.value) || 0;
+
+            totalDistance += distance;
+            totalDuration += duration;
+
+            routeSummary += `Leg: ${leg.start_address} to ${leg.end_address} - Distance: ${distance} meters, Duration: ${duration} seconds.\n`;
+
+            // Add maneuver instructions
+            leg.steps.forEach((step, stepIndex) => {
+                if (step.navigationInstruction) {
+                    const maneuver = step.navigationInstruction.maneuver;
+                    let instructions = step.navigationInstruction.instructions.replace(/[^a-zA-Z0-9\s-]/g, '');
+                    const match = instructions.match(/([A-Za-z]+)\s(.+)/);
+                    let formattedInstructions = match ? 
+                        `<span class="maneuver">${match[1]}</span>: <span class="instructions">${match[2]}</span>` : 
+                        instructions;
+
+                    routeSummary += `Step ${stepIndex + 1}: Maneuver: ${maneuver}, Instruction: ${formattedInstructions}\n`;
+                }
+            });
+        });
+
+        const sustainabilityMetrics = getSustainabilityMetrics(totalDistance, totalDuration);
+        const routeScore = calculateRouteScore(totalDistance, totalDuration, sustainabilityMetrics);
+
+        if (routeScore < bestRouteScore) {
+            bestRouteScore = routeScore;
+            bestRoute = {
+                routeIndex: index + 1,
+                totalDistance,
+                totalDuration,
+                routePolyline,
+                sustainabilityMetrics,
+                routeSummary
+            };
+        }
+
+        displayRouteSummary(routeSummary, index + 1);
+    });
+
+    if (bestRoute) {
+        displayRouteOnMap(bestRoute.routePolyline);
+        displayRouteMetrics(bestRoute);
+        displayRouteSummary(bestRoute.routeSummary, "Optimal Route");
+    } else {
+        console.error("❌ No valid routes found.");
+        document.getElementById("status").innerText = "❌ No valid routes found.";
+    }
+}
+
+        function calculateRouteScore(distance, duration, sustainabilityMetrics) {
+            // Adjust this function based on your criteria for "optimal" (e.g., prioritize sustainability, shortest time, etc.)
+            const distanceWeight = 0.3;
+            const durationWeight = 0.4;
+            const carbonFootprintWeight = 0.3;
+
+            const carbonFootprint = parseFloat(sustainabilityMetrics.carbonFootprint);
+            const score = (distance * distanceWeight) + (duration * durationWeight) + (carbonFootprint * carbonFootprintWeight);
+            return score;
+        }
+
+        function displayRouteOnMap(routePolyline) {
+            const polyline = new google.maps.Polyline({
+                path: google.maps.geometry.encoding.decodePath(routePolyline),
+                geodesic: true,
+                strokeColor: "#FF0000",
+                strokeOpacity: 1.0,
+                strokeWeight: 3
+            });
+
+            polyline.setMap(map);
+        }
+
+        function displayRouteSummary(summary, routeIndex) {
+            const summaryDiv = document.createElement("div");
+            summaryDiv.className = "route-summary";
+            summaryDiv.innerHTML = `
+                <h3>Route ${routeIndex} Summary</h3>
+                <pre>${summary}</pre>
+            `;
+            document.body.appendChild(summaryDiv);
+        }
+
+        function displayRouteMetrics(route) {
+            const metricsDiv = document.createElement("div");
+            metricsDiv.innerHTML = `
+                <h3>Optimal Route Metrics</h3>
+                <p>Total Distance: ${route.totalDistance} meters</p>
+                <p>Total Duration: ${route.totalDuration} seconds</p>
+                <p>Carbon Footprint: ${route.sustainabilityMetrics.carbonFootprint} kg CO2</p>
+            `;
+            document.body.appendChild(metricsDiv);
+        }
+
+        function getSustainabilityMetrics(distance, duration) {
+            // Simulate carbon footprint estimation (for demonstration purposes)
+            const carbonFootprint = (distance / 1000) * 0.2; // Simplified calculation
+            return {
+                carbonFootprint: carbonFootprint.toFixed(2)
+            };
+        }
+
+        // Initialize Google Maps on page load
+        window.onload = loadGoogleMapsScript;
+    </script>
+</head>
+<body>
+    <h1>Sustainable Route Optimizer</h1>
+    <div>
+        <input type="text" id="origin" placeholder="Enter origin location">
+        <input type="text" id="destination" placeholder="Enter destination location">
+        <button onclick="findRoute()">Find Route</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="map"></div>
+</body>
+</html>
